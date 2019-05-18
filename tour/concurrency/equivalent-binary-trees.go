@@ -9,14 +9,21 @@ import (
 // Walk walks the tree t sending all values
 // from the tree to the channel ch.
 func Walk(t *tree.Tree, ch chan int) {
+	recurse(t, ch, 0)
+}
+
+func recurse(t *tree.Tree, ch chan int, rec int) {
 	if t == nil {
 		return
 	}
 
-	Walk(t.Left, ch)
+	recurse(t.Left, ch, rec+1)
 	ch <- t.Value
-	Walk(t.Right, ch)
+	recurse(t.Right, ch, rec+1)
 
+	if rec == 0 {
+		close(ch)
+	}
 }
 
 // Same determines whether the trees
@@ -28,24 +35,30 @@ func Same(t1, t2 *tree.Tree) bool {
 	go Walk(t1, c1)
 	go Walk(t2, c2)
 
-	for i := 0; i < 10; i++ {
-		x, y := <-c1, <-c2
-		if x != y {
+	for {
+		v1, ok1 := <-c1
+		v2, ok2 := <-c2
+
+		if !ok1 && !ok2 {
+			return true
+		}
+
+		if !ok1 || !ok2 || v1 != v2 {
 			return false
 		}
 	}
-
-	return true
 }
 
 func main() {
-	fmt.Println(Same(tree.New(1), tree.New(5)))
-	fmt.Println(Same(tree.New(1), tree.New(1)))
-	// c1 := make(chan int)
-	// go Walk(tree.New(1), c1)
 
-	// for i := 0; i < 10; i++ {
-	// 	fmt.Print(<-c1, " ")
-	// }
+	c1 := make(chan int)
+	go Walk(tree.New(1), c1)
+
+	for v := range c1 {
+		fmt.Print(v, " ")
+	}
 	fmt.Println()
+
+	fmt.Println(Same(tree.New(1), tree.New(2)))
+	fmt.Println(Same(tree.New(1), tree.New(1)))
 }
