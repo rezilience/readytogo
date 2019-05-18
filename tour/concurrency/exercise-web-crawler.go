@@ -1,67 +1,72 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"sync"
-	"time"
 )
 
-// Set A thread safe Set data structure using a map and Mutex
-type Set struct {
-	m   map[string]int
-	mux sync.Mutex
-}
+// fetched tracks URLs that have been (or are being) fetched.
+// The lock must be held while reading from or writing to the map.
+// See https://golang.org/ref/spec#Struct_types section on embedded types.
+var fetched = struct {
+	m map[string]error
+	sync.Mutex
+}{m: make(map[string]error)}
 
-// Contains returns true if key is present else false
-func (u *Set) Contains(key string) bool {
-	u.mux.Lock()
-	defer u.mux.Unlock()
-	_, ok := u.m[key]
-	return ok
-}
+var loading = errors.New("url load in progress") // sentinel value
 
-// Add the key to the set
-func (u *Set) Add(key string) {
-	u.mux.Lock()
-	defer u.mux.Unlock()
-	u.m[key] = 1
-}
-
-// Fetcher returns the body of URL and
-// a slice of URLs found on that page.
 type Fetcher interface {
+	// Fetch returns the body of URL and
+	// a slice of URLs found on that page.
 	Fetch(url string) (body string, urls []string, err error)
 }
 
-// Crawl crawls the given url recursively for given depth and fetcher
-func Crawl(url string, depth int, fetcher Fetcher) {
-	crawled := &Set{m: make(map[string]int)}
-	DeepCrawl(url, depth, fetcher, crawled)
-}
-
-// DeepCrawl uses fetcher to recursively crawl
+// Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
-func DeepCrawl(url string, depth int, fetcher Fetcher, crawled *Set) {
-	// TODO: Instead of time.Sleep, use a better way to be notified when all goroutines are complete
-	if crawled.Contains(url) {
-		return
-	} else {
-		crawled.Add(url)
-	}
+func Crawl(url string, depth int, fetcher Fetcher) {
 	if depth <= 0 {
+		fmt.Printf("<- Done with %v, depth 0.\n", url)
 		return
 	}
+
+	fetched.Lock()
+	if _, ok := fetched.m[url]; ok {
+		fetched.Unlock()
+		fmt.Printf("<- Done with %v, already fetched.\n", url)
+		return
+	}
+	// We mark the url to be loading to avoid others reloading it at the same time.
+	fetched.m[url] = loading
+	fetched.Unlock()
+
+	// We load it concurrently.
 	body, urls, err := fetcher.Fetch(url)
+
+	// And update the status in a synced zone.
+	fetched.Lock()
+	fetched.m[url] = err
+	fetched.Unlock()
+
 	if err != nil {
-		fmt.Println(err)
+		// fmt.Println(err)
+		fmt.Printf("<- Error on %v: %v\n", url, err)
 		return
 	}
 	fmt.Printf("found: %s %q\n", url, body)
-	for _, u := range urls {
-		go DeepCrawl(u, depth-1, fetcher, crawled)
+	done := make(chan bool)
+	for i, u := range urls {
+		fmt.Printf("-> Crawling child %v/%v of %v : %v.\n", i, len(urls), url, u)
+		go func(url string) {
+			Crawl(url, depth-1, fetcher)
+			done <- true
+		}(u)
 	}
-	time.Sleep(time.Second)
-	return
+	for i, u := range urls {
+		fmt.Printf("<- [%v] %v/%v Waiting for child %v.\n", url, i, len(urls), u)
+		<-done
+	}
+	fmt.Printf("<- Done with %v\n", url)
 }
 
 func main() {
