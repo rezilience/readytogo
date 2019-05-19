@@ -1,20 +1,14 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 )
 
-// fetched tracks URLs that have been (or are being) fetched.
-// The lock must be held while reading from or writing to the map.
-// See https://golang.org/ref/spec#Struct_types section on embedded types.
-var fetched = struct {
-	m map[string]error
+type Fetched struct {
+	m map[string]bool
 	sync.Mutex
-}{m: make(map[string]error)}
-
-var loading = errors.New("url load in progress") // sentinel value
+}
 
 type Fetcher interface {
 	// Fetch returns the body of URL and
@@ -25,48 +19,43 @@ type Fetcher interface {
 // Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
 func Crawl(url string, depth int, fetcher Fetcher) {
+	fetched := &Fetched{m: make(map[string]bool)}
+	crawl(url, depth, fetcher, fetched)
+}
+
+func crawl(url string, depth int, fetcher Fetcher, fetched *Fetched) {
+	// This implementation doesn't do either:
+	// fmt.Println("Inside crawl", url, depth)
 	if depth <= 0 {
-		fmt.Printf("<- Done with %v, depth 0.\n", url)
 		return
 	}
 
 	fetched.Lock()
 	if _, ok := fetched.m[url]; ok {
 		fetched.Unlock()
-		fmt.Printf("<- Done with %v, already fetched.\n", url)
 		return
 	}
-	// We mark the url to be loading to avoid others reloading it at the same time.
-	fetched.m[url] = loading
+	fetched.m[url] = true
 	fetched.Unlock()
 
-	// We load it concurrently.
 	body, urls, err := fetcher.Fetch(url)
-
-	// And update the status in a synced zone.
-	fetched.Lock()
-	fetched.m[url] = err
-	fetched.Unlock()
-
 	if err != nil {
-		// fmt.Println(err)
-		fmt.Printf("<- Error on %v: %v\n", url, err)
+		fmt.Println(err)
 		return
 	}
 	fmt.Printf("found: %s %q\n", url, body)
+	// fmt.Printf("urls: %v\n", urls)
 	done := make(chan bool)
-	for i, u := range urls {
-		fmt.Printf("-> Crawling child %v/%v of %v : %v.\n", i, len(urls), url, u)
+	for _, u := range urls {
 		go func(url string) {
-			Crawl(url, depth-1, fetcher)
+			crawl(url, depth-1, fetcher, fetched)
 			done <- true
 		}(u)
 	}
-	for i, u := range urls {
-		fmt.Printf("<- [%v] %v/%v Waiting for child %v.\n", url, i, len(urls), u)
+	for range urls {
 		<-done
 	}
-	fmt.Printf("<- Done with %v\n", url)
+	return
 }
 
 func main() {
