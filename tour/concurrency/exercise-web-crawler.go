@@ -49,8 +49,8 @@ func crawl(url string, depth int, fetcher Fetcher, fetched *Fetched) {
 	for _, u := range urls {
 		go func(url string) {
 			crawl(url, depth-1, fetcher, fetched)
-			done <- true
-		}(u)
+			done <- true // after the call to crawl since you want the main thread to wait until the crawl in goroutine is complete
+		}(u) // passing the url because you don't want a closure over the original variable leading to inconsistencies, but a copy of it in each iteration
 	}
 	for range urls {
 		<-done
